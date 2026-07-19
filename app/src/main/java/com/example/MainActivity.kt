@@ -32,6 +32,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Request call permission at startup for a seamless experience
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            if (checkSelfPermission(android.Manifest.permission.CALL_PHONE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.CALL_PHONE), 101)
+            }
+        }
+
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme(darkTheme = viewModel.isDarkTheme) {

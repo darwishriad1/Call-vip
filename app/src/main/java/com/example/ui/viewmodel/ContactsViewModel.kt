@@ -1,7 +1,11 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
+import android.provider.ContactsContract
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -11,6 +15,7 @@ import com.example.data.model.CallLogEntity
 import com.example.data.model.ContactEntity
 import com.example.data.repository.ContactRepository
 import com.example.data.security.SettingsManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -57,6 +63,8 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
     // Active Call state
     var activeCall by mutableStateOf<ActiveCallState?>(null)
         private set
+
+    var currentSystemCall: android.telecom.Call? = null
 
     private var callTimerJob: Job? = null
 
@@ -184,8 +192,46 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // Simulated Dialer and Calling
-    fun startCall(contact: ContactEntity, isIncoming: Boolean = false) {
+    // Real and Simulated Call Operations
+    fun makeRealPhoneCall(number: String) {
+        if (number.isEmpty()) return
+        val context = getApplication<Application>()
+        val uri = Uri.fromParts("tel", number, null)
+        
+        val hasCallPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, 
+            android.Manifest.permission.CALL_PHONE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        val intent = if (hasCallPermission) {
+            Intent(Intent.ACTION_CALL, uri).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        } else {
+            Intent(Intent.ACTION_DIAL, uri).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                val dialIntent = Intent(Intent.ACTION_DIAL, uri).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(dialIntent)
+            } catch (ex: Exception) {
+                // Ignore fallback failures
+            }
+        }
+    }
+
+    fun startCall(contact: ContactEntity, isIncoming: Boolean = false, isSimulation: Boolean = false) {
+        if (!isSimulation && !isIncoming) {
+            makeRealPhoneCall(contact.realNumber)
+            return
+        }
+
         val currentCall = ActiveCallState(
             contactId = contact.id,
             displayName = contact.activeName,
@@ -207,6 +253,9 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun answerIncomingCall() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            currentSystemCall?.answer(android.telecom.VideoProfile.STATE_AUDIO_ONLY)
+        }
         val current = activeCall ?: return
         activeCall = current.copy(isIncoming = false, durationSeconds = 0)
         startCallTimer()
@@ -224,16 +273,27 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
 
     fun toggleMute() {
         val current = activeCall ?: return
-        activeCall = current.copy(isMuted = !current.isMuted)
+        val nextMuted = !current.isMuted
+        activeCall = current.copy(isMuted = nextMuted)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            com.example.service.SmartInCallService.toggleSystemMute(nextMuted)
+        }
     }
 
     fun toggleSpeaker() {
         val current = activeCall ?: return
-        activeCall = current.copy(isSpeakerOn = !current.isSpeakerOn)
+        val nextSpeaker = !current.isSpeakerOn
+        activeCall = current.copy(isSpeakerOn = nextSpeaker)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            com.example.service.SmartInCallService.toggleSystemSpeaker(nextSpeaker)
+        }
     }
 
     fun endCall() {
         callTimerJob?.cancel()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            currentSystemCall?.disconnect()
+        }
         val current = activeCall ?: return
         
         // Save Call to Log before finishing
@@ -253,11 +313,16 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             delay(1500) // Keep the "Ended Call" text for a second for realism
             activeCall = null
+            currentSystemCall = null
         }
     }
 
-    fun dialCustomNumber(number: String) {
-        // Dialing an unsaved number
+    fun dialCustomNumber(number: String, isSimulation: Boolean = false) {
+        if (!isSimulation) {
+            makeRealPhoneCall(number)
+            return
+        }
+
         val currentCall = ActiveCallState(
             displayName = number,
             displayNumber = number,
@@ -273,12 +338,56 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
         startCallTimer()
     }
 
+    fun setSystemCall(call: android.telecom.Call) {
+        currentSystemCall = call
+        val handleUri = call.details?.handle
+        val number = handleUri?.schemeSpecificPart ?: "مجهول"
+        val isIncoming = call.state == android.telecom.Call.STATE_RINGING
+
+        viewModelScope.launch {
+            val list = contactsState.value
+            val foundContact = list.find { it.realNumber == number || it.displayNumber == number }
+            if (foundContact != null) {
+                val currentCall = ActiveCallState(
+                    contactId = foundContact.id,
+                    displayName = foundContact.activeName,
+                    displayNumber = foundContact.activeNumber,
+                    displayEmoji = foundContact.avatarEmoji,
+                    displayColor = foundContact.avatarColor,
+                    realNumber = foundContact.realNumber,
+                    isIncoming = isIncoming,
+                    durationSeconds = 0,
+                    isMuted = false,
+                    isSpeakerOn = false
+                )
+                activeCall = currentCall
+            } else {
+                val currentCall = ActiveCallState(
+                    displayName = number,
+                    displayNumber = number,
+                    displayEmoji = "👤",
+                    displayColor = 0xFF475569.toInt(), // Slate Gray
+                    realNumber = number,
+                    isIncoming = isIncoming,
+                    durationSeconds = 0,
+                    isMuted = false,
+                    isSpeakerOn = false
+                )
+                activeCall = currentCall
+            }
+            callTimerJob?.cancel()
+            if (!isIncoming) {
+                startCallTimer()
+            }
+        }
+    }
+
     fun startCallWithNumber(number: String, isIncoming: Boolean = false) {
         viewModelScope.launch {
             val list = contactsState.value
             val foundContact = list.find { it.realNumber == number || it.displayNumber == number }
             if (foundContact != null) {
-                startCall(foundContact, isIncoming)
+                startCall(foundContact, isIncoming, isSimulation = true)
             } else {
                 val currentCall = ActiveCallState(
                     displayName = number,
@@ -373,4 +482,106 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
             }
         }
     }
+
+    // Device Contacts Integration
+    var deviceContacts = mutableStateListOf<DeviceContact>()
+        private set
+
+    var hasContactsPermission by mutableStateOf(false)
+        private set
+
+    fun checkContactsPermission() {
+        val context = getApplication<Application>()
+        hasContactsPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.READ_CONTACTS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    fun fetchDeviceContacts() {
+        checkContactsPermission()
+        if (!hasContactsPermission) return
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val list = mutableListOf<DeviceContact>()
+            val resolver = context.contentResolver
+            
+            var cursor: android.database.Cursor? = null
+            try {
+                cursor = resolver.query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    arrayOf(
+                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                        ContactsContract.CommonDataKinds.Phone.NUMBER
+                    ),
+                    null,
+                    null,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+                )
+                
+                cursor?.let { c ->
+                    val nameIndex = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                    val numberIndex = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                    
+                    while (c.moveToNext()) {
+                        val name = if (nameIndex >= 0) c.getString(nameIndex) ?: "" else ""
+                        val number = if (numberIndex >= 0) c.getString(numberIndex) ?: "" else ""
+                        if (name.isNotEmpty() && number.isNotEmpty()) {
+                            val cleanNum = number.replace("\\s".toRegex(), "")
+                            val isAlreadyImported = contactsState.value.any { 
+                                it.realNumber.replace("\\s".toRegex(), "") == cleanNum || 
+                                it.displayNumber.replace("\\s".toRegex(), "") == cleanNum 
+                            }
+                            list.add(DeviceContact(name = name, phoneNumber = number, isImported = isAlreadyImported))
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                cursor?.close()
+            }
+            
+            val uniqueList = list.distinctBy { it.phoneNumber.replace("\\s".toRegex(), "").replace("-", "") }
+            
+            withContext(Dispatchers.Main) {
+                deviceContacts.clear()
+                deviceContacts.addAll(uniqueList)
+            }
+        }
+    }
+
+    fun importDeviceContact(deviceContact: DeviceContact, alternativeName: String, alternativeNumber: String, category: String = "خاص") {
+        viewModelScope.launch {
+            val emojis = listOf("👤", "🔑", "🛡️", "🕵️", "👥", "💼", "🏠", "🌟", "🔥", "⚡")
+            val colors = listOf(
+                0xFF6200EE.toInt(), 0xFF03DAC6.toInt(), 0xFF3700B3.toInt(),
+                0xFF4CAF50.toInt(), 0xFFFF5722.toInt(), 0xFFE91E63.toInt(),
+                0xFF9C27B0.toInt(), 0xFF00BCD4.toInt(), 0xFFFF9800.toInt()
+            )
+            val randomEmoji = emojis.random()
+            val randomColor = colors.random()
+            
+            val contact = ContactEntity.create(
+                realName = deviceContact.name,
+                realNumber = deviceContact.phoneNumber,
+                displayName = alternativeName,
+                displayNumber = alternativeNumber,
+                avatarColor = randomColor,
+                avatarEmoji = randomEmoji,
+                isIdentityActive = true,
+                category = category,
+                note = "تم استيراده من جهات اتصال الهاتف"
+            )
+            repository.insertContact(contact)
+            fetchDeviceContacts()
+        }
+    }
 }
+
+data class DeviceContact(
+    val name: String,
+    val phoneNumber: String,
+    val isImported: Boolean = false
+)

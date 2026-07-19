@@ -1,13 +1,33 @@
 package com.example.service
 
+import android.content.Intent
 import android.os.Build
+import android.os.IBinder
 import android.telecom.Call
+import android.telecom.CallAudioState
 import android.telecom.InCallService
 import android.util.Log
 import androidx.annotation.RequiresApi
 
 @RequiresApi(Build.VERSION_CODES.M)
 class SmartInCallService : InCallService() {
+
+    override fun onBind(intent: Intent): IBinder? {
+        instance = this
+        Log.d("SmartInCallService", "SmartInCallService Bound")
+        return super.onBind(intent)
+    }
+
+    override fun onUnbind(intent: Intent): Boolean {
+        instance = null
+        Log.d("SmartInCallService", "SmartInCallService Unbound")
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        instance = null
+        super.onDestroy()
+    }
 
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
@@ -38,9 +58,33 @@ class SmartInCallService : InCallService() {
 
     companion object {
         private var listener: SystemCallListener? = null
+        private var instance: SmartInCallService? = null
 
         fun setListener(systemCallListener: SystemCallListener?) {
             listener = systemCallListener
+        }
+
+        fun toggleSystemMute(muted: Boolean) {
+            try {
+                instance?.setMuted(muted)
+                Log.d("SmartInCallService", "System Mute state set to: $muted")
+            } catch (e: Exception) {
+                Log.e("SmartInCallService", "Failed to set system mute state", e)
+            }
+        }
+
+        fun toggleSystemSpeaker(speakerOn: Boolean) {
+            try {
+                val route = if (speakerOn) {
+                    CallAudioState.ROUTE_SPEAKER
+                } else {
+                    CallAudioState.ROUTE_WIRED_OR_EARPIECE
+                }
+                instance?.setAudioRoute(route)
+                Log.d("SmartInCallService", "System Audio Route set to: $route")
+            } catch (e: Exception) {
+                Log.e("SmartInCallService", "Failed to set system audio route", e)
+            }
         }
     }
 

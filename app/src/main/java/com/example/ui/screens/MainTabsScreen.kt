@@ -72,6 +72,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -216,18 +217,93 @@ fun ContactsTabContent(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val categories = listOf("الكل", "عائلة", "أصدقاء", "عمل", "خاص")
+    val context = LocalContext.current
+
+    var showSecureContacts by remember { mutableStateOf(true) }
+    val hasContactsPermission = viewModel.hasContactsPermission
+    val deviceContacts = viewModel.deviceContacts
+
+    var contactToImport by remember { mutableStateOf<com.example.ui.viewmodel.DeviceContact?>(null) }
+
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        viewModel.checkContactsPermission()
+        if (isGranted) {
+            viewModel.fetchDeviceContacts()
+        } else {
+            Toast.makeText(context, "الرجاء منح إذن الوصول لعرض جهات اتصال الهاتف", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(showSecureContacts) {
+        if (!showSecureContacts) {
+            viewModel.checkContactsPermission()
+            if (viewModel.hasContactsPermission) {
+                viewModel.fetchDeviceContacts()
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // Toggle tabs (Secure App Contacts vs. Device Contacts)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (showSecureContacts) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    .clickable { showSecureContacts = true }
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "الجهات الآمنة (${contacts.size})",
+                    color = if (showSecureContacts) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (!showSecureContacts) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    .clickable { showSecureContacts = false }
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "جهات اتصال الهاتف",
+                    color = if (!showSecureContacts) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+            }
+        }
+
         // Search bar
         TextField(
             value = searchQuery,
             onValueChange = { viewModel.searchQuery.value = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .testTag("contact_search_input"),
-            placeholder = { Text("ابحث بالاسم الحقيقي أو اسم العرض...") },
+            placeholder = { 
+                Text(
+                    if (showSecureContacts) "ابحث بالاسم الحقيقي أو اسم العرض..." 
+                    else "ابحث في جهات اتصال الهاتف..."
+                ) 
+            },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = "بحث") },
             colors = TextFieldDefaults.colors(
                 focusedIndicatorColor = Color.Transparent,
@@ -236,86 +312,443 @@ fun ContactsTabContent(
             singleLine = true
         )
 
-        // Categories Tab
-        ScrollableTabRow(
-            selectedTabIndex = categories.indexOf(selectedCategory).coerceAtLeast(0),
-            edgePadding = 16.dp,
-            divider = {},
-            containerColor = Color.Transparent
-        ) {
-            categories.forEach { cat ->
-                Tab(
-                    selected = selectedCategory == cat,
-                    onClick = { viewModel.selectedCategory.value = cat },
-                    text = {
-                        Text(
-                            text = cat,
-                            fontWeight = if (selectedCategory == cat) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                        )
-                    }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (contacts.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+        if (showSecureContacts) {
+            // Categories Tab
+            ScrollableTabRow(
+                selectedTabIndex = categories.indexOf(selectedCategory).coerceAtLeast(0),
+                edgePadding = 16.dp,
+                divider = {},
+                containerColor = Color.Transparent
             ) {
-                Icon(
-                    imageVector = Icons.Default.Contacts,
-                    contentDescription = "لا توجد جهات اتصال",
-                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
-                    modifier = Modifier.size(80.dp)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = if (searchQuery.isNotEmpty()) "لم يتم العثور على نتائج" else "قائمة جهات الاتصال الخاصة فارغة",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = if (searchQuery.isNotEmpty()) "جرب البحث بكلمات أخرى" else "اضغط على زر (+) في الأسفل لإضافة هوية بديلة جديدة مجانًا بخصوصية تامة.",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                    textAlign = TextAlign.Center
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(contacts, key = { it.id }) { contact ->
-                    ContactItemCard(
-                        contact = contact,
-                        onToggleIdentity = { viewModel.toggleContactIdentity(contact) },
-                        onCall = { viewModel.startCall(contact, isIncoming = false) },
-                        onReceiveSimulatedCall = { viewModel.startCall(contact, isIncoming = true) },
-                        onEdit = { onEditContact(contact.id) },
-                        onDelete = { viewModel.deleteContact(contact) }
+                categories.forEach { cat ->
+                    Tab(
+                        selected = selectedCategory == cat,
+                        onClick = { viewModel.selectedCategory.value = cat },
+                        text = {
+                            Text(
+                                text = cat,
+                                fontWeight = if (selectedCategory == cat) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
                     )
                 }
-                item { Spacer(modifier = Modifier.height(80.dp)) } // extra padding for fab
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (contacts.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Contacts,
+                        contentDescription = "لا توجد جهات اتصال",
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                        modifier = Modifier.size(80.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (searchQuery.isNotEmpty()) "لم يتم العثور على نتائج" else "قائمة جهات الاتصال الخاصة فارغة",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (searchQuery.isNotEmpty()) "جرب البحث بكلمات أخرى" else "اضغط على زر (+) في الأسفل لإضافة هوية بديلة جديدة مجانًا بخصوصية تامة.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(contacts, key = { it.id }) { contact ->
+                        ContactItemCard(
+                            contact = contact,
+                            viewModel = viewModel,
+                            onToggleIdentity = { viewModel.toggleContactIdentity(contact) },
+                            onCall = { viewModel.startCall(contact, isIncoming = false) },
+                            onReceiveSimulatedCall = { viewModel.startCall(contact, isIncoming = true) },
+                            onEdit = { onEditContact(contact.id) },
+                            onDelete = { viewModel.deleteContact(contact) }
+                        )
+                    }
+                    item { Spacer(modifier = Modifier.height(80.dp)) } // extra padding for fab
+                }
+            }
+        } else {
+            // Device Contacts list
+            if (!hasContactsPermission) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Contacts,
+                                contentDescription = "قفل الوصول",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(64.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "الوصول لجهات اتصال الهاتف",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "لرؤية واستيراد جهات الاتصال المخزنة في هاتفك وتأمين هوياتها، يرجى منح إذن قراءة جهات الاتصال للتطبيق.",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 20.sp
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Button(
+                                onClick = {
+                                    contactsPermissionLauncher.launch(android.Manifest.permission.READ_CONTACTS)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("منح إذن الوصول وحماية جهات الاتصال")
+                            }
+                        }
+                    }
+                }
+            } else {
+                val filteredDeviceContacts = if (searchQuery.isEmpty()) {
+                    deviceContacts
+                } else {
+                    deviceContacts.filter { 
+                        it.name.contains(searchQuery, ignoreCase = true) || 
+                        it.phoneNumber.contains(searchQuery, ignoreCase = true) 
+                    }
+                }
+
+                if (filteredDeviceContacts.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "لا توجد نتائج",
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                            modifier = Modifier.size(80.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = if (searchQuery.isNotEmpty()) "لم يتم العثور على أي جهة اتصال مطابقة" else "لم يتم العثور على جهات اتصال في الهاتف",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(filteredDeviceContacts) { deviceContact ->
+                            DeviceContactItemCard(
+                                deviceContact = deviceContact,
+                                onProtect = { contactToImport = deviceContact }
+                            )
+                        }
+                        item { Spacer(modifier = Modifier.height(80.dp)) }
+                    }
+                }
+            }
+        }
+    }
+
+    // Import Contact Dialog
+    contactToImport?.let { deviceContact ->
+        ImportContactDialog(
+            deviceContact = deviceContact,
+            onDismiss = { contactToImport = null },
+            onConfirm = { altName, altNumber, category ->
+                viewModel.importDeviceContact(deviceContact, altName, altNumber, category)
+                contactToImport = null
+                Toast.makeText(context, "تمت حماية وتأمين جهة الاتصال '${deviceContact.name}' بنجاح!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+}
+
+@Composable
+fun DeviceContactItemCard(
+    deviceContact: com.example.ui.viewmodel.DeviceContact,
+    onProtect: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                // Round Letter Avatar
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = deviceContact.name.firstOrNull()?.toString() ?: "👤",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column {
+                    Text(
+                        text = deviceContact.name,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = deviceContact.phoneNumber,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (deviceContact.isImported) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFE8F5E9))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "محمي",
+                        tint = Color(0xFF2E7D32),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "مؤمن",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF2E7D32)
+                    )
+                }
+            } else {
+                Button(
+                    onClick = onProtect,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LockOpen,
+                        contentDescription = "حماية",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("حماية", fontSize = 12.sp)
+                }
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ImportContactDialog(
+    deviceContact: com.example.ui.viewmodel.DeviceContact,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, String) -> Unit
+) {
+    var alternativeName by remember { mutableStateOf(deviceContact.name + " (آمن)") }
+    val randomSuffix = remember { (1000000..9999999).random().toString() }
+    var alternativeNumber by remember { mutableStateOf("079$randomSuffix") }
+    var selectedCategory by remember { mutableStateOf("خاص") }
+    val categories = listOf("خاص", "عائلة", "أصدقاء", "عمل")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "تأمين وحماية جهة الاتصال",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Right,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.2f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "جهة الاتصال الأصلية:",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Text(
+                            text = "${deviceContact.name} (${deviceContact.phoneNumber})",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                OutlinedTextField(
+                    value = alternativeName,
+                    onValueChange = { alternativeName = it },
+                    label = { Text("الاسم المستعار البديل (القناع)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = alternativeNumber,
+                    onValueChange = { alternativeNumber = it },
+                    label = { Text("رقم الهاتف المظهري (الوهمي)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    singleLine = true
+                )
+
+                Text(
+                    text = "التصنيف:",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    categories.forEach { cat ->
+                        val isSelected = selectedCategory == cat
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary 
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .clickable { selectedCategory = cat }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = cat,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    text = "* عندما تتصل بك هذه الجهة أو تتصل بها، سيتم استخدام القناع البديل تلقائيًا لحماية خصوصيتك التامة.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (alternativeName.isNotBlank() && alternativeNumber.isNotBlank()) {
+                        onConfirm(alternativeName, alternativeNumber, selectedCategory)
+                    }
+                }
+            ) {
+                Text("تأمين وحماية الآن")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("إلغاء")
+            }
+        }
+    )
+}
+
 @Composable
 fun ContactItemCard(
     contact: ContactEntity,
+    viewModel: ContactsViewModel,
     onToggleIdentity: () -> Unit,
     onCall: () -> Unit,
     onReceiveSimulatedCall: () -> Unit,
@@ -323,6 +756,10 @@ fun ContactItemCard(
     onDelete: () -> Unit
 ) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showPinDialog by remember { mutableStateOf(false) }
+    var enteredPin by remember { mutableStateOf("") }
+    var pinError by remember { mutableStateOf("") }
+    var isRealIdentityRevealed by remember { mutableStateOf(false) }
 
     if (showDeleteConfirm) {
         AlertDialog(
@@ -342,6 +779,92 @@ fun ContactItemCard(
             },
             dismissButton = {
                 OutlinedButton(onClick = { showDeleteConfirm = false }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    if (showPinDialog) {
+        AlertDialog(
+            onDismissRequest = { 
+                showPinDialog = false
+                enteredPin = ""
+                pinError = ""
+            },
+            title = { 
+                Text(
+                    text = "تأكيد الهوية", 
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                ) 
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "الرجاء إدخال رمز الحماية المكون من 4 أرقام لعرض البيانات الحقيقية لجهة الاتصال.",
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 18.sp
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = enteredPin,
+                        onValueChange = { 
+                            if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                enteredPin = it
+                                pinError = ""
+                            }
+                        },
+                        label = { Text("رمز الحماية (PIN)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("reveal_pin_input"),
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        isError = pinError.isNotEmpty()
+                    )
+                    if (pinError.isNotEmpty()) {
+                        Text(
+                            text = pinError,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (viewModel.settingsManager.verifyPin(enteredPin)) {
+                            isRealIdentityRevealed = true
+                            showPinDialog = false
+                            enteredPin = ""
+                            pinError = ""
+                        } else {
+                            pinError = "رمز الحماية غير صحيح، حاول مجددًا"
+                        }
+                    }
+                ) {
+                    Text("تأكيد")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { 
+                        showPinDialog = false
+                        enteredPin = ""
+                        pinError = ""
+                    }
+                ) {
                     Text("إلغاء")
                 }
             }
@@ -382,7 +905,7 @@ fun ContactItemCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = contact.activeName,
+                            text = contact.displayName, // Always show Alternative Name prominently as primary entry
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -412,13 +935,36 @@ fun ContactItemCard(
                                     )
                                 }
                             }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.LockOpen,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(10.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "بديل متوقف",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = contact.activeNumber,
+                        text = contact.displayNumber, // Always show Alternative Number prominently as primary entry
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -482,23 +1028,55 @@ fun ContactItemCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Show real identity details in small fonts for admin verification
-                Column {
+                // Show real identity details in small fonts for authorized verification
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "البيانات الحقيقية:",
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        text = "البيانات الحقيقية (المؤمنة):",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
                     )
-                    Text(
-                        text = "${contact.realName} • ${contact.realNumber}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    if (isRealIdentityRevealed) {
+                        Text(
+                            text = "${contact.realName} • ${contact.realNumber}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    } else {
+                        Text(
+                            text = "•••••••• • ••••••••",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    }
                 }
 
                 // Edit, Delete, Toggle alternative identity actions
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Reveal/Hide real identity button
+                    IconButton(
+                        onClick = {
+                            if (isRealIdentityRevealed) {
+                                isRealIdentityRevealed = false
+                            } else {
+                                if (viewModel.settingsManager.isPinEnabled) {
+                                    showPinDialog = true
+                                } else {
+                                    isRealIdentityRevealed = true
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (isRealIdentityRevealed) Icons.Default.LockOpen else Icons.Default.Lock,
+                            contentDescription = if (isRealIdentityRevealed) "إخفاء البيانات الحقيقية" else "كشف البيانات الحقيقية",
+                            tint = if (isRealIdentityRevealed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                        )
+                    }
+
                     // Toggle alternate identity setting
                     IconButton(onClick = onToggleIdentity) {
                         Icon(
