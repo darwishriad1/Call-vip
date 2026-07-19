@@ -1,0 +1,6 @@
+{
+  "name": "الهوية الذكية",
+  "description": "تطبيق إدارة جهات الاتصال بخصوصية كاملة مع تعيين هوية عرض بديلة لكل جهة اتصال وحماية بالرمز السري.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
